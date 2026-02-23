@@ -10,36 +10,41 @@ st.title("⚖️ J J International: Autonomous Proxy Manager")
 
 # 1. Sidebar Setup
 st.sidebar.header("1. Upload Center")
-uploaded_files = st.sidebar.file_uploader("Upload Teacher Timetables (PDF)", accept_multiple_files=True, type=['pdf'])
-contact_file = st.sidebar.file_uploader("Upload Teacher Contact List (Excel/CSV)", type=['xlsx', 'csv'])
+uploaded_files = st.sidebar.file_uploader("Upload Timetables (PDF)", accept_multiple_files=True, type=['pdf'])
+contact_file = st.sidebar.file_uploader("Upload Contacts (Excel/CSV)", type=['xlsx', 'csv', 'xls'])
 
 st.sidebar.header("2. Attendance Management")
 today = datetime.datetime.now().strftime("%A")
 if today == "Sunday": today = "Monday" 
 
-absent_input = st.sidebar.text_area("Type Absent Teacher Names (one per line):")
+absent_input = st.sidebar.text_area("Absent Teacher Names (one per line):")
 btn_generate = st.sidebar.button("🚀 Run Auto-Allocation")
+
+# NEW: The "Smart-Cleaner" function to ignore spaces and dashes
+def clean_text(txt):
+    return "".join(filter(str.isalnum, str(txt))).lower()
 
 if uploaded_files:
     all_slots = []
     teacher_workload = {} 
     contacts = {}
 
-    # Load Contacts for WhatsApp
     if contact_file:
         try:
-            df_contacts = pd.read_excel(contact_file) if contact_file.name.endswith('xlsx') else pd.read_csv(contact_file)
-            contacts = {str(row[0]).lower().strip(): str(row[1]).strip() for _, row in df_contacts.iterrows()}
-        except Exception:
-            st.error("Contact file format error.")
+            # Handle both CSV and Excel for your contact list
+            df_c = pd.read_excel(contact_file) if not contact_file.name.endswith('.csv') else pd.read_csv(contact_file)
+            for _, row in df_c.iterrows():
+                # Store numbers using cleaned versions of the names in your Excel
+                contacts[clean_text(row[0])] = str(row[1]).strip()
+        except Exception as e:
+            st.sidebar.error(f"Contact File Error: {e}")
 
-    # PASS 1: Build Schedule Database
+    # Pass 1: Build the Schedule
     for file in uploaded_files:
         with pdfplumber.open(file) as pdf:
             table = pdf.pages[0].extract_table()
             if not table: continue
             
-            # Smart Name Search: Finds the teacher name in the header
             t_name = ""
             for row in table[:2]:
                 for cell in row:
@@ -62,58 +67,50 @@ if uploaded_files:
                 teacher_workload[t_name] = daily_count
 
     with st.expander("🔍 View All Detected Teachers"):
-        st.write(", ".join(teacher_workload.keys()))
+        st.write(list(teacher_workload.keys()))
 
-    # PASS 2: Allocation & Output
     if btn_generate and absent_input:
-        absent_list = [name.strip().lower() for name in absent_input.split('\n') if name.strip()]
-        needed_proxies = [s for s in all_slots if any(a in s['teacher'].lower() for a in absent_list) and s['subject_info'] != "FREE"]
+        # Clean the names you typed in the box
+        absent_list = [clean_text(n) for n in absent_input.split('\n') if n.strip()]
+        needed_proxies = [s for s in all_slots if clean_text(s['teacher']) in absent_list and s['subject_info'] != "FREE"]
         
         if needed_proxies:
-            st.subheader(f"📋 Final Proxy Plan for {today}")
+            st.subheader(f"✅ Final Proxy Plan for {today}")
             report_data = []
             
             for slot in needed_proxies:
-                candidates = [s for s in all_slots if not any(a in s['teacher'].lower() for a in absent_list) 
-                              and s['period'] == slot['period'] 
+                # Find teachers NOT in the absent list who are FREE
+                candidates = [s for s in all_slots if clean_text(s['teacher']) not in absent_list 
+                              and str(s['period']) == str(slot['period']) 
                               and (s['subject_info'] == "FREE" or "Library" in str(s['subject_info']))]
                 
                 if candidates:
+                    # Choose teacher with least workload
                     candidates.sort(key=lambda x: teacher_workload.get(x['teacher'], 99))
                     chosen = candidates[0]
                     teacher_workload[chosen['teacher']] += 1
                     
-                    # Store data for Download Sheet
-                    report_data.append({
-                        "Period": slot['period'], "Time": slot['time'],
-                        "Absent Teacher": slot['teacher'], "Class": slot['subject_info'],
-                        "Assigned Proxy": chosen['teacher']
-                    })
+                    report_data.append({"Period": slot['period'], "Time": slot['time'], "Absent": slot['teacher'], "Class": slot['subject_info'], "Proxy": chosen['teacher']})
                     
                     c1, c2, c3 = st.columns([2, 2, 1])
                     c1.write(f"**P{slot['period']}**: {slot['teacher']} ({slot['subject_info']})")
                     c2.write(f"👉 **Proxy**: {chosen['teacher']}")
                     
-                    # WhatsApp Logic
-                    phone = contacts.get(chosen['teacher'].lower().strip())
+                    # WhatsApp Button Logic using Smart Matching
+                    phone = contacts.get(clean_text(chosen['teacher']))
                     if phone:
-                        msg = f"Hello {chosen['teacher']}, you have a Proxy in P{slot['period']} for {slot['teacher']} ({slot['subject_info']}). - J J International"
-                        url = f"https://wa.me/{str(phone).strip()}?text={urllib.parse.quote(msg)}"
+                        msg = f"Hello {chosen['teacher']}, Proxy assigned in P{slot['period']} for {slot['teacher']} ({slot['subject_info']})."
+                        url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
                         c3.markdown(f"[![WhatsApp](https://img.shields.io/badge/WhatsApp-Send-25D366?style=for-the-badge&logo=whatsapp)]({url})")
                     else:
-                        c3.info("No Contact Found")
+                        c3.info("No Number")
 
-            # 3. THE DOWNLOAD BUTTON (Excel Export)
+            # 3. DOWNLOAD BUTTON: This will now appear immediately!
             if report_data:
                 df_report = pd.DataFrame(report_data)
                 output = BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_report.to_excel(writer, index=False, sheet_name='ProxyAssignments')
-                st.download_button(
-                    label="📥 Download Proxy Sheet (Excel)",
-                    data=output.getvalue(),
-                    file_name=f"J_J_International_Proxies_{today}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                # Requirements include openpyxl for Excel output
+                df_report.to_excel(output, index=False)
+                st.download_button(label="📥 Download & Print Proxy Sheet", data=output.getvalue(), file_name=f"Proxies_{today}.xlsx")
         else:
-            st.warning("No teaching periods found. Please ensure the names typed match the 'Detected Teachers' list exactly.")
+            st.error("No matches found! Please copy the names from 'Detected Teachers' above exactly.")
