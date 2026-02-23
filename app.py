@@ -11,7 +11,7 @@ st.title("⚖️ J J International: Autonomous Proxy Manager")
 # 1. Sidebar Setup
 st.sidebar.header("1. Upload Center")
 uploaded_files = st.sidebar.file_uploader("Upload Timetables (PDF)", accept_multiple_files=True, type=['pdf'])
-contact_file = st.sidebar.file_uploader("Upload Teacher Contacts (CSV/Excel)", type=['xlsx', 'csv', 'xls'])
+contact_file = st.sidebar.file_uploader("Upload Contacts (CSV/Excel)", type=['xlsx', 'csv', 'xls'])
 
 st.sidebar.header("2. Attendance Management")
 today = datetime.datetime.now().strftime("%A")
@@ -20,7 +20,7 @@ if today == "Sunday": today = "Monday"
 absent_input = st.sidebar.text_area("Absent Teacher Names (one per line):")
 btn_generate = st.sidebar.button("🚀 Run Auto-Allocation")
 
-# The "Super-Cleaner" to force matches even with spelling/spacing differences
+# FORCE MATCH: This function removes dots, dashes, and spaces
 def force_clean(txt):
     return "".join(filter(str.isalnum, str(txt))).lower()
 
@@ -31,10 +31,10 @@ if uploaded_files:
 
     if contact_file:
         try:
-            # Handle your specific contact.csv
+            # Reads your specific contact.csv
             df_c = pd.read_csv(contact_file) if contact_file.name.endswith('.csv') else pd.read_excel(contact_file)
             for _, row in df_c.iterrows():
-                # Clean the name from Column A to ensure a match
+                # Matches Column A names to Column B numbers
                 contacts[force_clean(row[0])] = str(row[1]).strip()
         except Exception as e:
             st.sidebar.error(f"Contact File Error: {e}")
@@ -44,6 +44,7 @@ if uploaded_files:
             table = pdf.pages[0].extract_table()
             if not table: continue
             
+            # Smart Name Search for J J International PDFs
             t_name = ""
             for row in table[:2]:
                 for cell in row:
@@ -66,10 +67,12 @@ if uploaded_files:
                 teacher_workload[t_name] = daily_count
 
     with st.expander("🔍 View All Detected Teachers"):
+        # Shows you exactly what names were found
         st.write(list(teacher_workload.keys()))
 
     if btn_generate and absent_input:
         absent_list = [force_clean(n) for n in absent_input.split('\n') if n.strip()]
+        # Finds matches even if user types with different spacing
         needed_proxies = [s for s in all_slots if force_clean(s['teacher']) in absent_list and s['subject_info'] != "FREE"]
         
         if needed_proxies:
@@ -77,7 +80,7 @@ if uploaded_files:
             report_data = []
             
             for slot in needed_proxies:
-                # Balanced workload logic for J J International staff
+                # Workload balancing logic
                 candidates = [s for s in all_slots if force_clean(s['teacher']) not in absent_list 
                               and str(s['period']) == str(slot['period']) 
                               and (s['subject_info'] == "FREE" or "Library" in str(s['subject_info']))]
@@ -93,7 +96,7 @@ if uploaded_files:
                     c1.write(f"**P{slot['period']}**: {slot['teacher']} ({slot['subject_info']})")
                     c2.write(f"👉 **Proxy**: {chosen['teacher']}")
                     
-                    # WhatsApp Button with Phone Number matching
+                    # Sends pre-filled WhatsApp message
                     phone = contacts.get(force_clean(chosen['teacher']))
                     if phone:
                         msg = f"Hello {chosen['teacher']}, Proxy assigned in P{slot['period']} for {slot['teacher']} ({slot['subject_info']})."
@@ -105,8 +108,8 @@ if uploaded_files:
             if report_data:
                 df_report = pd.DataFrame(report_data)
                 output = BytesIO()
-                # Requirements file includes openpyxl to support this download
+                # Requires openpyxl which is in your requirements.txt
                 df_report.to_excel(output, index=False)
                 st.download_button(label="📥 Download & Print Proxy Sheet", data=output.getvalue(), file_name=f"Proxies_{today}.xlsx")
         else:
-            st.error("No matches found. Please copy the name exactly from the list above.")
+            st.error("Match Failed. Copy the name exactly from the 'View All Detected Teachers' list above.")
