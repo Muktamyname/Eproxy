@@ -14,15 +14,15 @@ uploaded_files = st.sidebar.file_uploader("Upload Timetables (PDF)", accept_mult
 contact_file = st.sidebar.file_uploader("Upload Teacher Contacts (CSV/Excel)", type=['xlsx', 'csv', 'xls'])
 
 st.sidebar.header("2. Attendance Management")
+# Detect current day for J J International
 today = datetime.datetime.now().strftime("%A")
 if today == "Sunday": today = "Monday" 
 
-absent_input = st.sidebar.text_area("Absent Teacher Names (one per line):")
+absent_input = st.sidebar.text_area("Absent Teacher Names (A, B, or C):")
 btn_generate = st.sidebar.button("🚀 Run Auto-Allocation")
 
-# Normalizes text to ensure a 100% match
-def normalize(txt):
-    return "".join(filter(str.isalnum, str(txt))).lower()
+def clean(txt):
+    return "".join(filter(str.isalnum, str(txt))).lower().strip()
 
 if uploaded_files:
     all_slots = []
@@ -32,9 +32,9 @@ if uploaded_files:
     if contact_file:
         try:
             df_c = pd.read_csv(contact_file) if contact_file.name.endswith('.csv') else pd.read_excel(contact_file)
+            # Match names like "A" from your Excel
             for _, row in df_c.iterrows():
-                # Store using normalized names from your Excel
-                contacts[normalize(row[0])] = str(row[1]).strip()
+                contacts[clean(row[0])] = str(row[1]).strip()
         except Exception as e:
             st.sidebar.error(f"Contact File Error: {e}")
 
@@ -43,20 +43,19 @@ if uploaded_files:
             table = pdf.pages[0].extract_table()
             if not table: continue
             
-            # DEEP STUDY FIX: Use ONLY the filename you created (e.g., A, B, C)
-            # This ignores the "Std. - 12 Com" text inside the PDF entirely
+            # Use only renamed filenames (A, B, C)
             t_name = file.name.replace(".pdf", "").strip()
             
-            # Find the Day Column automatically
+            # Find the Day Column
             headers = []
             header_row_idx = -1
             for i, row in enumerate(table):
-                if any(day in str(row).lower() for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]):
+                if any(day in str(row).lower() for day in ["mon", "tue", "wed", "thu", "fri", "sat"]):
                     headers = row
                     header_row_idx = i
                     break
             
-            day_idx = next((i for i, d in enumerate(headers) if d and today.lower() in str(d).lower()), -1)
+            day_idx = next((i for i, d in enumerate(headers) if d and today[:3].lower() in str(d).lower()), -1)
             
             if day_idx != -1:
                 daily_count = 0
@@ -65,8 +64,8 @@ if uploaded_files:
                     if any(x in str(row).lower() for x in ["break", "lunch", "short"]): continue
                     
                     raw_val = row[day_idx]
-                    # If blank, it's a free period
-                    if raw_val is None or str(raw_val).strip() == "":
+                    # Treat empty or blank as FREE
+                    if raw_val is None or str(raw_val).strip() == "" or "free" in str(raw_val).lower():
                         is_free = True
                         sub_val = "FREE"
                     else:
@@ -81,14 +80,14 @@ if uploaded_files:
         st.write(list(teacher_workload.keys()))
 
     if btn_generate and absent_input:
-        absent_list = [normalize(n) for n in absent_input.split('\n') if n.strip()]
-        needed_proxies = [s for s in all_slots if normalize(s['teacher']) in absent_list and not s['is_free']]
+        absent_list = [clean(n) for n in absent_input.split('\n') if n.strip()]
+        needed_proxies = [s for s in all_slots if clean(s['teacher']) in absent_list and not s['is_free']]
         
         if needed_proxies:
             st.subheader(f"✅ Final Proxy Plan for {today}")
             report_data = []
             for slot in needed_proxies:
-                candidates = [s for s in all_slots if normalize(s['teacher']) not in absent_list 
+                candidates = [s for s in all_slots if clean(s['teacher']) not in absent_list 
                               and str(s['period']) == str(slot['period']) and s['is_free']]
                 
                 if candidates:
@@ -102,7 +101,7 @@ if uploaded_files:
                     c1.write(f"**P{slot['period']}**: {slot['teacher']} ({slot['subject_info']})")
                     c2.write(f"👉 **Proxy**: {chosen['teacher']}")
                     
-                    phone = contacts.get(normalize(chosen['teacher']))
+                    phone = contacts.get(clean(chosen['teacher']))
                     if phone:
                         msg = f"Hello {chosen['teacher']}, Proxy in P{slot['period']} for {slot['teacher']} ({slot['subject_info']})."
                         url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
@@ -113,7 +112,8 @@ if uploaded_files:
             if report_data:
                 df_report = pd.DataFrame(report_data)
                 output = BytesIO()
+                # Requirements include openpyxl for J J International
                 df_report.to_excel(output, index=False)
                 st.download_button(label="📥 Download & Print Proxy Sheet", data=output.getvalue(), file_name=f"Proxies_{today}.xlsx")
         else:
-            st.error("No matches found. Please copy the name from 'Detected Teachers' above.")
+            st.error("No classes found for this teacher today. Check if the PDF has the correct Day column!")
