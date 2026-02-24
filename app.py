@@ -17,7 +17,7 @@ st.sidebar.header("2. Attendance Management")
 today = datetime.datetime.now().strftime("%A")
 if today == "Sunday": today = "Monday" 
 
-absent_input = st.sidebar.text_area("Absent Teacher Names (A, B, or C):")
+absent_input = st.sidebar.text_area("Absent Teacher Names (Chem., English, or Comp):")
 btn_generate = st.sidebar.button("🚀 Run Auto-Allocation")
 
 # THE AI MATCHER: Removes quotes, dots, and spaces to force a 100% match
@@ -114,3 +114,4 @@ if uploaded_files:
                 st.download_button(label="📥 Download & Print Proxy Sheet", data=out.getvalue(), file_name=f"Proxies_{today}.xlsx")
         else:
             st.error("Match Failed: No classes detected. Ensure your input matches the A, B, C filenames.")
+
