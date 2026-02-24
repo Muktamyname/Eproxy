@@ -17,10 +17,10 @@ st.sidebar.header("2. Attendance Management")
 today = datetime.datetime.now().strftime("%A")
 if today == "Sunday": today = "Monday" 
 
-absent_input = st.sidebar.text_area("Absent Teacher Names (Chem., English, or Comp):")
+absent_input = st.sidebar.text_area("Absent Teacher Names (Comp, English, Chem):")
 btn_generate = st.sidebar.button("🚀 Run Auto-Allocation")
 
-# THE AI MATCHER: Removes quotes, dots, and spaces to force a 100% match
+# AI Normalization: Strips all special characters
 def ai_clean(txt):
     return "".join(filter(str.isalnum, str(txt))).lower().strip()
 
@@ -33,6 +33,7 @@ if uploaded_files:
         try:
             df_c = pd.read_csv(contact_file) if contact_file.name.endswith('.csv') else pd.read_excel(contact_file)
             for _, row in df_c.iterrows():
+                # Matches names from your updated contact list
                 contacts[ai_clean(row[0])] = str(row[1]).strip()
         except Exception:
             st.sidebar.error("Error reading Contact File")
@@ -42,10 +43,10 @@ if uploaded_files:
             table = pdf.pages[0].extract_table()
             if not table: continue
             
-            # Using your renamed filenames (A, B, C)
+            # Using your new filenames: Comp, English, Chem
             t_name = file.name.replace(".pdf", "").strip()
             
-            # Find the Day Column automatically (TUE vs Tuesday)
+            # Find the Day Column (e.g., "Tue" or "Tuesday")
             headers = []
             h_row = -1
             for i, row in enumerate(table):
@@ -60,10 +61,11 @@ if uploaded_files:
                 daily_count = 0
                 for row in table[h_row+1:]:
                     if not row or not row[0]: continue
+                    # Ignore non-teaching rows
                     if any(x in str(row).lower() for x in ["break", "lunch", "short"]): continue
                     
                     raw_val = row[day_idx]
-                    # RULE: If cell is empty/blank, it is a FREE period
+                    # RULE: Blank = FREE
                     if raw_val is None or str(raw_val).strip() == "":
                         is_free = True
                         sub_val = "FREE"
@@ -75,8 +77,11 @@ if uploaded_files:
                     all_slots.append({'teacher': t_name, 'period': row[0], 'time': row[1] if len(row) > 1 else "", 'subject_info': sub_val, 'is_free': is_free})
                 teacher_workload[t_name] = daily_count
 
+    with st.expander("🔍 AI Detected Teachers"):
+        st.write(list(teacher_workload.keys()))
+
     if btn_generate and absent_input:
-        # AI Matcher ignores the quotes you typed
+        # Agent ignores quotes automatically
         absent_list = [ai_clean(n) for n in absent_input.split('\n') if n.strip()]
         needed_proxies = [s for s in all_slots if ai_clean(s['teacher']) in absent_list and not s['is_free']]
         
@@ -84,6 +89,7 @@ if uploaded_files:
             st.subheader(f"✅ Final Proxy Plan for {today}")
             report_data = []
             for slot in needed_proxies:
+                # Agent finds teachers who are "FREE" in this period
                 candidates = [s for s in all_slots if ai_clean(s['teacher']) not in absent_list 
                               and str(s['period']) == str(slot['period']) and s['is_free']]
                 
@@ -100,7 +106,7 @@ if uploaded_files:
                     
                     phone = contacts.get(ai_clean(chosen['teacher']))
                     if phone:
-                        msg = f"Hello {chosen['teacher']}, Proxy assigned in P{slot['period']} for {slot['teacher']} ({slot['subject_info']})."
+                        msg = f"Hello {chosen['teacher']}, Proxy in P{slot['period']} for {slot['teacher']} ({slot['subject_info']})."
                         url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
                         c3.markdown(f"[![WhatsApp](https://img.shields.io/badge/WhatsApp-Send-25D366?style=for-the-badge&logo=whatsapp)]({url})")
                     else:
@@ -109,9 +115,8 @@ if uploaded_files:
             if report_data:
                 df_r = pd.DataFrame(report_data)
                 out = BytesIO()
-                # Requirements include openpyxl for Excel download
+                # Requirements include openpyxl for J J International
                 df_r.to_excel(out, index=False)
                 st.download_button(label="📥 Download & Print Proxy Sheet", data=out.getvalue(), file_name=f"Proxies_{today}.xlsx")
         else:
-            st.error("Match Failed: No classes detected. Ensure your input matches the A, B, C filenames.")
-
+            st.error("AI Match Failed: Ensure the teacher has classes on the PDF for today!")
