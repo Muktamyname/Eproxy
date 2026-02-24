@@ -20,7 +20,7 @@ if today == "Sunday": today = "Monday"
 absent_input = st.sidebar.text_area("Absent Teacher Names (one per line):")
 btn_generate = st.sidebar.button("🚀 Run Auto-Allocation")
 
-# THE KEY: This function removes dots, dashes, and spaces so matches NEVER fail
+# Normalizes text to handle dashes/dots/spaces
 def force_clean(txt):
     return "".join(filter(str.isalnum, str(txt))).lower()
 
@@ -31,7 +31,7 @@ if uploaded_files:
 
     if contact_file:
         try:
-            # Reads your contact.csv
+            # Matches your contact.csv
             df_c = pd.read_csv(contact_file) if contact_file.name.endswith('.csv') else pd.read_excel(contact_file)
             for _, row in df_c.iterrows():
                 contacts[force_clean(row[0])] = str(row[1]).strip()
@@ -43,7 +43,7 @@ if uploaded_files:
             table = pdf.pages[0].extract_table()
             if not table: continue
             
-            # Extracts name correctly from J J International PDFs
+            # Find Teacher Name in header
             t_name = ""
             for row in table[:2]:
                 for cell in row:
@@ -60,9 +60,18 @@ if uploaded_files:
                 daily_count = 0
                 for row in table[2:]:
                     if not row or any(x in str(row) for x in ["Break", "Lunch", "Short"]): continue
-                    sub_val = row[day_idx] if row[day_idx] else "FREE"
-                    if sub_val != "FREE": daily_count += 1
-                    all_slots.append({'teacher': t_name, 'period': row[0], 'time': row[1], 'subject_info': sub_val})
+                    
+                    # LOGIC FIX: If cell is None or empty, it is a FREE period
+                    raw_val = row[day_idx]
+                    is_free = False
+                    if raw_val is None or str(raw_val).strip() == "" or "free" in str(raw_val).lower():
+                        is_free = True
+                        sub_val = "FREE"
+                    else:
+                        sub_val = str(raw_val).strip()
+                        daily_count += 1
+                    
+                    all_slots.append({'teacher': t_name, 'period': row[0], 'time': row[1], 'subject_info': sub_val, 'is_free': is_free})
                 teacher_workload[t_name] = daily_count
 
     with st.expander("🔍 View All Detected Teachers"):
@@ -70,17 +79,17 @@ if uploaded_files:
 
     if btn_generate and absent_input:
         absent_list = [force_clean(n) for n in absent_input.split('\n') if n.strip()]
-        needed_proxies = [s for s in all_slots if force_clean(s['teacher']) in absent_list and s['subject_info'] != "FREE"]
+        needed_proxies = [s for s in all_slots if force_clean(s['teacher']) in absent_list and not s['is_free']]
         
         if needed_proxies:
             st.subheader(f"✅ Final Proxy Plan for {today}")
             report_data = []
             
             for slot in needed_proxies:
-                # Balanced workload logic
+                # Find teachers who are FREE (blank) during this period
                 candidates = [s for s in all_slots if force_clean(s['teacher']) not in absent_list 
                               and str(s['period']) == str(slot['period']) 
-                              and (s['subject_info'] == "FREE" or "Library" in str(s['subject_info']))]
+                              and (s['is_free'] or "Library" in str(s['subject_info']))]
                 
                 if candidates:
                     candidates.sort(key=lambda x: teacher_workload.get(x['teacher'], 99))
@@ -91,11 +100,11 @@ if uploaded_files:
                     
                     c1, c2, c3 = st.columns([2, 2, 1])
                     c1.write(f"**P{slot['period']}**: {slot['teacher']} ({slot['subject_info']})")
-                    c2.write(f"👉 **Proxy**: {chosen['teacher']}")
+                    c2.write(f"👉 **Proxy**: {chosen['teacher']} (Current Load: {teacher_workload[chosen['teacher']]})")
                     
                     phone = contacts.get(force_clean(chosen['teacher']))
                     if phone:
-                        msg = f"Hello {chosen['teacher']}, Proxy assigned in P{slot['period']} for {slot['teacher']} ({slot['subject_info']})."
+                        msg = f"Hello {chosen['teacher']}, Proxy in P{slot['period']} for {slot['teacher']} ({slot['subject_info']})."
                         url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
                         c3.markdown(f"[![WhatsApp](https://img.shields.io/badge/WhatsApp-Send-25D366?style=for-the-badge&logo=whatsapp)]({url})")
                     else:
@@ -104,8 +113,7 @@ if uploaded_files:
             if report_data:
                 df_report = pd.DataFrame(report_data)
                 output = BytesIO()
-                # Requirements file includes openpyxl to support this
                 df_report.to_excel(output, index=False)
                 st.download_button(label="📥 Download & Print Proxy Sheet", data=output.getvalue(), file_name=f"Proxies_{today}.xlsx")
         else:
-            st.error("Match Failed. Please copy the name exactly from the 'Detected Teachers' list above.")
+            st.error("No matches found. Check spelling against the 'Detected Teachers' list.")
