@@ -14,15 +14,14 @@ uploaded_files = st.sidebar.file_uploader("Upload Timetables (PDF)", accept_mult
 contact_file = st.sidebar.file_uploader("Upload Teacher Contacts (CSV/Excel)", type=['xlsx', 'csv', 'xls'])
 
 st.sidebar.header("2. Attendance Management")
-# Detects current day for Gujarat school week
 today = datetime.datetime.now().strftime("%A")
 if today == "Sunday": today = "Monday" 
 
 absent_input = st.sidebar.text_area("Absent Teacher Names (A, B, or C):")
 btn_generate = st.sidebar.button("🚀 Run Auto-Allocation")
 
-# AGENT BRAIN: Force-cleans all data to find matches
-def agent_clean(txt):
+# THE AI MATCHER: Removes quotes, dots, and spaces to force a 100% match
+def ai_clean(txt):
     return "".join(filter(str.isalnum, str(txt))).lower().strip()
 
 if uploaded_files:
@@ -32,22 +31,21 @@ if uploaded_files:
 
     if contact_file:
         try:
-            # Flexible reading for your contact.csv
             df_c = pd.read_csv(contact_file) if contact_file.name.endswith('.csv') else pd.read_excel(contact_file)
             for _, row in df_c.iterrows():
-                contacts[agent_clean(row[0])] = str(row[1]).strip()
+                contacts[ai_clean(row[0])] = str(row[1]).strip()
         except Exception:
-            st.sidebar.error("Contact File Error")
+            st.sidebar.error("Error reading Contact File")
 
     for file in uploaded_files:
         with pdfplumber.open(file) as pdf:
             table = pdf.pages[0].extract_table()
             if not table: continue
             
-            # Use only the renamed filename (A, B, C) to avoid internal PDF errors
+            # Using your renamed filenames (A, B, C)
             t_name = file.name.replace(".pdf", "").strip()
             
-            # Agent searches for Day headers automatically
+            # Find the Day Column automatically (TUE vs Tuesday)
             headers = []
             h_row = -1
             for i, row in enumerate(table):
@@ -65,7 +63,7 @@ if uploaded_files:
                     if any(x in str(row).lower() for x in ["break", "lunch", "short"]): continue
                     
                     raw_val = row[day_idx]
-                    # AGENT RULE: Blank cell = FREE Period
+                    # RULE: If cell is empty/blank, it is a FREE period
                     if raw_val is None or str(raw_val).strip() == "":
                         is_free = True
                         sub_val = "FREE"
@@ -77,20 +75,16 @@ if uploaded_files:
                     all_slots.append({'teacher': t_name, 'period': row[0], 'time': row[1] if len(row) > 1 else "", 'subject_info': sub_val, 'is_free': is_free})
                 teacher_workload[t_name] = daily_count
 
-    with st.expander("🔍 AI Detected Teachers"):
-        st.write(list(teacher_workload.keys()))
-
     if btn_generate and absent_input:
-        # Agent automatically ignores quotes if you type "A"
-        absent_list = [agent_clean(n) for n in absent_input.split('\n') if n.strip()]
-        needed_proxies = [s for s in all_slots if agent_clean(s['teacher']) in absent_list and not s['is_free']]
+        # AI Matcher ignores the quotes you typed
+        absent_list = [ai_clean(n) for n in absent_input.split('\n') if n.strip()]
+        needed_proxies = [s for s in all_slots if ai_clean(s['teacher']) in absent_list and not s['is_free']]
         
         if needed_proxies:
             st.subheader(f"✅ Final Proxy Plan for {today}")
             report_data = []
             for slot in needed_proxies:
-                # Agent finds available teachers with lowest workload
-                candidates = [s for s in all_slots if agent_clean(s['teacher']) not in absent_list 
+                candidates = [s for s in all_slots if ai_clean(s['teacher']) not in absent_list 
                               and str(s['period']) == str(slot['period']) and s['is_free']]
                 
                 if candidates:
@@ -104,7 +98,7 @@ if uploaded_files:
                     c1.write(f"**P{slot['period']}**: {slot['teacher']} ({slot['subject_info']})")
                     c2.write(f"👉 **Proxy**: {chosen['teacher']}")
                     
-                    phone = contacts.get(agent_clean(chosen['teacher']))
+                    phone = contacts.get(ai_clean(chosen['teacher']))
                     if phone:
                         msg = f"Hello {chosen['teacher']}, Proxy assigned in P{slot['period']} for {slot['teacher']} ({slot['subject_info']})."
                         url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
@@ -115,8 +109,8 @@ if uploaded_files:
             if report_data:
                 df_r = pd.DataFrame(report_data)
                 out = BytesIO()
-                # Requirements include openpyxl
+                # Requirements include openpyxl for Excel download
                 df_r.to_excel(out, index=False)
                 st.download_button(label="📥 Download & Print Proxy Sheet", data=out.getvalue(), file_name=f"Proxies_{today}.xlsx")
         else:
-            st.error("AI Match Failed: Please check your PDF Day columns.")
+            st.error("Match Failed: No classes detected. Ensure your input matches the A, B, C filenames.")
